@@ -18,6 +18,8 @@ import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
+import openpi.policies.capture_policy as capture_policy
+import openpi.policies.craftwork_policy as craftwork_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
@@ -351,6 +353,110 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+        )
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotCaptureDataConfig(DataConfigFactory):
+    """Configure LeRobot capture data for pi training."""
+
+    camera_key: str = "image"
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        f"observation/{self.camera_key}": self.camera_key,
+                        "observation/state": "state",
+                        "actions": "actions",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                capture_policy.CaptureInputs(
+                    model_type=model_config.model_type,
+                    camera_key=self.camera_key,
+                )
+            ],
+            outputs=[capture_policy.CaptureOutputs()],
+        )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=("actions",),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotCraftworkDataConfig(DataConfigFactory):
+    camera_count: int = 3
+    base_camera_index: int = 0
+    left_wrist_index: int | None = 1
+    right_wrist_index: int | None = 2
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        def _validate_index(name: str, index: int | None) -> None:
+            if index is None:
+                return
+            if index < 0 or index >= self.camera_count:
+                raise ValueError(
+                    f"{name}={index} out of range for camera_count={self.camera_count}"
+                )
+
+        _validate_index("base_camera_index", self.base_camera_index)
+        _validate_index("left_wrist_index", self.left_wrist_index)
+        _validate_index("right_wrist_index", self.right_wrist_index)
+
+        camera_keys = tuple(f"image_camera_{idx}" for idx in range(self.camera_count))
+
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        **{
+                            f"observation/image_camera_{idx}": f"image_camera_{idx}"
+                            for idx in range(self.camera_count)
+                        },
+                        "observation/state": "state",
+                        "actions": "actions",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                craftwork_policy.CraftworkInputs(
+                    model_type=model_config.model_type,
+                    camera_keys=camera_keys,
+                    base_camera_index=self.base_camera_index,
+                    left_wrist_index=self.left_wrist_index,
+                    right_wrist_index=self.right_wrist_index,
+                ),
+            ],
+            outputs=[craftwork_policy.CraftworkOutputs()],
+        )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=("actions",),
         )
 
 
@@ -750,8 +856,36 @@ _CONFIGS = [
         ema_decay=0.999,
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         pytorch_weight_path="/path/to/your/pytorch_weight_path",
-        num_train_steps=30_000,
+        num_train_steps=100_000,
     ),
+
+    TrainConfig(
+        name="pi05_craftwork",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=16),
+        data=LeRobotCraftworkDataConfig(
+            repo_id="craftwork_pipe_insertion_samples",
+            base_config=DataConfig(prompt_from_task=True),
+            camera_count=4,
+            base_camera_index=3,
+            left_wrist_index=1,
+            right_wrist_index=None,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100_000,
+        batch_size=64,
+    ),
+    TrainConfig(
+        name="pi05_capture",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=16),
+        data=LeRobotCaptureDataConfig(
+            repo_id="capture_pipe_insertion_samples",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100_000,
+        batch_size=64,
+    ),
+
     #
     # Fine-tuning Aloha configs.
     #
