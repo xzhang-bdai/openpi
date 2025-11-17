@@ -863,10 +863,10 @@ _CONFIGS = [
         name="pi05_craftwork",
         model=pi0_config.Pi0Config(pi05=True, action_horizon=16),
         data=LeRobotCraftworkDataConfig(
-            repo_id="craftwork_pipe_insertion_samples",
+            repo_id="craftwork_pipe_insertion_50",
             base_config=DataConfig(prompt_from_task=True),
-            camera_count=4,
-            base_camera_index=3,
+            camera_count=2,
+            base_camera_index=0,
             left_wrist_index=1,
             right_wrist_index=None,
         ),
